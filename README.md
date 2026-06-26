@@ -1,151 +1,72 @@
 <!-- @format -->
 
-# AI SW Basic - SRE Failure Analysis Report
+# AI SW Basic - Agent Leak App Failure Report
 
-# 1. 개발 환경
+## 1. 개발 환경
 
-| 항목         | 내용                     |
-| ------------ | ------------------------ |
-| OS           | macOS (Apple Silicon M3) |
-| Runtime      | Docker Ubuntu 22.04      |
-| Architecture | linux/arm64              |
+- OS : macOS (Apple Silicon M3)
+- Runtime : Docker Ubuntu 22.04
+- Architecture : linux/arm64
 
 ---
 
-# 2. 미션 목표
+# 2. Boot Sequence
 
-본 미션은 Agent 서비스를 실행한 뒤 발생하는 장애(OOM, CPU Spike, Deadlock)를 관찰하고 원인을 분석한 후 환경변수 변경을 통해 장애를 재현 및 완화하는 것을 목표로 한다.
+Root 계정에서는 프로그램 실행이 거부되었으며 일반 사용자(agent-admin)로 실행 후 Boot Sequence를 모두 통과하였다.
 
----
+📸 **이미지 삽입 : 01_Root_Error.png**
 
-# 3. 실행 환경
-
-## Docker 실행
-
-```bash
-docker run --rm -it \
-  --platform linux/arm64 \
-  -v "$(pwd)":/mission \
-  -w /mission \
-  ubuntu:22.04 bash
-```
-
-## 실행 환경 구성
-
-```bash
-useradd -m agent-admin
-su - agent-admin
-
-export AGENT_HOME=/mission
-export AGENT_PORT=15034
-export MEMORY_LIMIT=256
-export CPU_MAX_OCCUPY=70
-export MULTI_THREAD_ENABLE=true
-```
-
-필수 디렉터리 생성
-
-```bash
-mkdir -p upload_files api_keys logs
-echo "agent_api_key_test" > api_keys/secret.key
-```
+📸 **이미지 삽입 : 02_Boot_OK.png**
 
 ---
 
-# 4. Boot Sequence
+# 3. OOM (Out Of Memory)
 
 ## 현상
 
-초기 실행 시 Root 계정에서는 프로그램이 실행되지 않았다.
+Heap Memory가 25MB부터 275MB까지 선형적으로 증가한 뒤 MemoryGuard에 의해 프로세스가 종료되었다.
 
 ```
-Running as 'root' is forbidden.
-```
+Current Heap
 
-## 원인
-
-운영 환경에서는 Root 계정으로 서비스 실행을 제한하기 때문이다.
-
-## 조치
-
-agent-admin 계정을 생성하여 실행하였다.
-
-## 결과
-
-```
-All Boot Checks Passed!
-
-Agent READY
-```
-
----
-
-# 5. Failure Report #1 - OOM
-
-## 현상
-
-프로세스 실행 후 Heap Memory가 지속적으로 증가하였다.
-
-```
 25MB
 50MB
-75MB
-100MB
-125MB
-150MB
-175MB
-200MB
-225MB
-250MB
+...
 275MB
-```
 
-이후
-
-```
 [CRITICAL] Memory limit exceeded
-
 SELF-TERMINATED
 ```
 
-메시지와 함께 프로세스가 종료되었다.
-
-## 증거
-
-- Boot Log
-- Memory 증가 로그
-- OOM 종료 메시지
-- Screenshot : 03_OOM_Crash.png
+📸 **이미지 삽입 : 03_OOM_Crash.png**
 
 ## 원인
 
-MEMORY_LIMIT=256MB로 설정되어 있었으며 Heap Memory가 제한값을 초과하였다.
-
-MemoryGuard가 프로세스를 보호하기 위해 프로세스를 강제 종료하였다.
+MEMORY_LIMIT=256MB로 설정되어 있었으며 Heap Memory가 제한값을 초과하여 MemoryGuard가 프로세스를 강제 종료하였다.
 
 ## 조치
 
-```
+```bash
 export MEMORY_LIMIT=512
 ```
 
 또는
 
-```
+```bash
 export MEMORY_LIMIT=1024
 ```
 
-로 변경하여 더 많은 메모리를 사용할 수 있도록 설정하였다.
+으로 변경하여 더 많은 메모리를 사용할 수 있도록 설정하였다.
 
-※ 이번 실습에서는 환경변수 변경은 수행하였으나 증가된 생존 시간을 정량적으로 측정하지는 않았다.
+※ 이번 실습에서는 환경변수 변경을 수행하였으나 증가된 생존 시간을 정량적으로 비교하지는 않았다.
 
 ---
 
-# 6. Failure Report #2 - CPU Spike
+# 4. CPU Spike
 
 ## 현상
 
-초기 설정
+초기 설정은 다음과 같았다.
 
 ```
 CPU_MAX_OCCUPY=70%
@@ -155,25 +76,18 @@ CPU_MAX_OCCUPY=70%
 
 ```
 WARNING
-
 Recommend Under 50%
 ```
 
-CPU 사용률이 권장치를 초과하였다.
-
-## 증거
-
-Boot 화면의 CPU Warning
-
-Screenshot : 04_CPU_Fixed.png
+📸 **이미지 삽입 : 04_CPU_Before.png**
 
 ## 원인
 
-CPU 제한값이 권장 기준보다 높게 설정되어 있었다.
+CPU 사용 제한값이 권장 기준보다 높게 설정되어 있었다.
 
 ## 조치
 
-```
+```bash
 export CPU_MAX_OCCUPY=50
 ```
 
@@ -181,49 +95,43 @@ export CPU_MAX_OCCUPY=50
 
 ```
 CPU Limit : 50%
-
 OK
 ```
 
-로 변경되었으며 CPU Warning이 제거되는 것을 확인하였다.
+를 확인하였다.
+
+📸 **이미지 삽입 : 05_CPU_After.png**
+
+CPU 제한을 낮추면 특정 프로세스가 CPU를 과점유하는 것을 방지하여 다른 서비스의 응답성을 유지할 수 있다.
 
 ---
 
-# 7. Failure Report #3 - Potential Deadlock
+# 5. Potential Deadlock
 
 ## 현상
-
-초기 실행
 
 ```
 MULTI_THREAD_ENABLE=True
 ```
 
-실행 결과
+상태에서
 
 ```
 SYSTEM WARNING
-
 POTENTIAL DEADLOCK IN CONCURRENT MODE
 ```
 
-Deadlock 가능성이 출력되었다.
+가 출력되었다.
 
-## 증거
-
-Boot Log
-
-Screenshot : 05_Deadlock_Fixed.png
+📸 **이미지 삽입 : 06_Deadlock_Before.png**
 
 ## 원인
 
-멀티스레드 환경에서 공유 자원 접근으로 인해 Deadlock 가능성이 존재하였다.
-
-실제 Deadlock(PID는 살아 있으나 로그가 멈추는 상태)은 이번 실습에서 재현하지 못하였다.
+멀티스레드 환경에서는 공유 자원에 대해 **상호 배제(Mutual Exclusion)** 가 발생한다. 두 스레드가 서로가 가진 Lock을 기다리는 **순환 대기(Circular Wait)** 상태가 되면 Deadlock이 발생할 수 있다.
 
 ## 조치
 
-```
+```bash
 export MULTI_THREAD_ENABLE=false
 ```
 
@@ -235,59 +143,38 @@ THREAD Concurrency : False
 SYSTEM STATUS : STABLE
 ```
 
-상태가 되어 Warning이 제거되는 것을 확인하였다.
+를 확인하였다.
+
+📸 **이미지 삽입 : 07_Deadlock_After.png**
 
 ---
 
-# 8. monitor.sh 분석
+# 6. monitor.sh 분석
 
-monitor.sh는 다음 정보를 수집하도록 작성하였다.
+monitor.sh는 아래 명령어를 이용하여 시스템 상태를 확인하였다.
 
-- 프로세스 실행 여부
-- 포트 상태
-- CPU 사용률
-- Memory 사용률
-- Disk 사용률
+| 항목    | 명령어      | 목적                                              |
+| ------- | ----------- | ------------------------------------------------- |
+| Process | `ps`        | 프로세스 실행 여부 확인                           |
+| CPU     | `top -bn1`  | CPU 사용률 확인 (`-b`: 배치모드, `-n1`: 1회 실행) |
+| Memory  | `free`      | 메모리 사용량 확인                                |
+| Disk    | `df`        | 디스크 사용률 확인                                |
+| Port    | `ss -tulnp` | 서비스 포트 확인                                  |
 
-사용 명령어
-
-| 목적          | 명령어 |
-| ------------- | ------ |
-| Process 확인  | ps     |
-| CPU 사용률    | top    |
-| Memory 사용률 | free   |
-| Disk 사용률   | df     |
-| Port 확인     | ss     |
-
-수집한 결과를 monitor.log에 기록하였다.
+수집한 정보를 monitor.log에 기록하도록 구성하였다.
 
 ---
 
-# 9. 운영 환경 개선 방안
+# 7. 운영 환경 개선
 
-## OOM
-
-- Memory Threshold 기반 사전 경고
-- Heap 사용률 80% 이상 시 Alert 발생
-- 메모리 누수 코드 수정
-
-## CPU
-
-- CPU 80% 이상 지속 시 Alert
-- Worker Thread 수 제한
-- Rate Limiting 적용
-
-## Deadlock
-
-- Lock Timeout 적용
-- Lock 획득 순서 통일
-- Thread Dump 자동 저장
-- Watchdog을 이용한 교착 상태 감지
+- Heap 사용률이 80%를 초과하면 Warning을 발생시키도록 monitor.sh 개선
+- CPU 사용률이 일정 시간 이상 지속되면 Alert 및 자동 Restart 기능 추가
+- Deadlock 발생 시 Thread Dump를 저장하고 Watchdog을 이용하여 자동 감지하도록 개선
 
 ---
 
-# 10. 회고
+# 8. 회고
 
-이번 미션을 통해 단순히 프로그램을 실행하는 것이 아니라 운영 환경에서 장애를 재현하고 분석하는 과정이 중요하다는 것을 확인하였다.
+이번 실습을 통해 OOM, CPU Spike, Deadlock을 각각 재현하고 환경변수를 이용하여 동작 변화를 확인하였다.
 
-특히 OOM, CPU Spike, Deadlock은 단순히 환경변수만 변경하는 것이 아니라 로그, PID, 시스템 자원 사용률 등을 함께 확인해야 원인을 정확하게 분석할 수 있다는 점을 배울 수 있었다.
+다시 수행한다면 **장애를 먼저 재현한 후 PID, Timestamp, monitor.log를 함께 수집하여 Before / After를 정량적으로 비교**하는 방식으로 트러블슈팅을 진행할 것이다.
