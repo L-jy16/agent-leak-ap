@@ -37,29 +37,16 @@ Agent READY
 Heap Memory가 25MB부터 275MB까지 지속적으로 증가하였으며 MemoryGuard가 Memory Limit를 초과했다고 판단하여 프로세스를 강제 종료하였다.
 
 ```text
-Current Heap
-
-25MB
-50MB
+2026-06-26 04:16:05,309 [INFO] [MemoryWorker] Current Heap: 25MB
+2026-06-26 04:16:08,343 [INFO] [MemoryWorker] Current Heap: 50MB
 ...
-275MB
-
-[CRITICAL] Memory limit exceeded
-
-SELF-TERMINATED
+2026-06-26 04:16:35,659 [INFO] [MemoryWorker] Current Heap: 275MB
+2026-06-26 04:16:35,661 [CRITICAL] [MemoryGuard] Memory limit exceeded (275MB >= 256MB)
+2026-06-26 04:16:35,661 [CRITICAL] [MemoryGuard] Self-terminating process 27
+>>> [SYSTEM] SELF-TERMINATED (Memory Limit Exceeded) <<<
 ```
 
 Timestamp
-
-```
-2026-06-26 04:16:35
-```
-
-PID
-
-```
-27
-```
 
 📷 **이미지 : 3.png**
 ![Heap Memory 증가 후 Memory Limit Exceeded](./img/3.png)
@@ -93,7 +80,11 @@ export MEMORY_LIMIT=1024
 | Heap 최대     | 275MB            | 512MB까지 허용           |
 | 결과          | OOM 종료         | 생존 시간 증가 예상      |
 
-※ 이번 실습에서는 Memory Limit 변경은 수행하였으나 실제 증가된 생존 시간을 정량적으로 측정하지 못하였다.
+MEMORY_LIMIT=256MB에서는 Heap이 275MB에 도달한 뒤 06:16:40에 MemoryGuard로 종료되었다.
+
+MEMORY_LIMIT=512MB에서는 Boot Sequence에서 MEMORY_LIMIT=512MB가 적용되었고, 275MB에서 MemoryGuard 종료가 발생하지 않았다. 이후 CPU 부하가 먼저 증가하여 06:19:59에 Watchdog(SIGTERM)에 의해 종료되었다.
+
+따라서 MEMORY_LIMIT 조정 후 OOM 종료 시점은 지연되었고, 장애 유형이 MemoryGuard 종료에서 CPU Watchdog 종료로 변화하였다.
 
 📷 **이미지 : 13.png (MEMORY_LIMIT=512 적용 화면)**
 ![MEMORY_LIMIT=512 적용 화면](./img/13.png)
@@ -102,40 +93,50 @@ export MEMORY_LIMIT=1024
 
 ## 현상
 
-초기 설정
+초기 설정은 다음과 같았다.
 
 ```text
 CPU_MAX_OCCUPY=70
 ```
 
-실행 결과
+실행 결과 CPU 사용률이 지속적으로 증가하였다.
 
 ```text
-WARNING
-
-Recommend Under 50%
+2026-06-26 06:19:21,609 [INFO] [CpuWorker] Current Load: 5.00%
+2026-06-26 06:19:24,741 [INFO] [CpuWorker] Current Load: 8.65%
+2026-06-26 06:19:27,871 [INFO] [CpuWorker] Current Load: 15.90%
+2026-06-26 06:19:31,002 [INFO] [CpuWorker] Current Load: 17.37%
+2026-06-26 06:19:34,129 [INFO] [CpuWorker] Current Load: 18.83%
+2026-06-26 06:19:37,261 [INFO] [CpuWorker] Current Load: 20.93%
+2026-06-26 06:19:40,390 [INFO] [CpuWorker] Current Load: 23.79%
+2026-06-26 06:19:43,519 [INFO] [CpuWorker] Current Load: 27.12%
+2026-06-26 06:19:46,651 [INFO] [CpuWorker] Current Load: 35.59%
+2026-06-26 06:19:49,783 [INFO] [CpuWorker] Current Load: 42.42%
+2026-06-26 06:19:52,912 [INFO] [CpuWorker] Current Load: 43.72%
+2026-06-26 06:19:56,041 [INFO] [CpuWorker] Current Load: 48.67%
+2026-06-26 06:19:59,173 [INFO] [CpuWorker] Current Load: 57.42%
+2026-06-26 06:19:59,279 [CRITICAL] [CpuWorker] CPU Threshold Violated! (57.42%).
+>>> [SYSTEM] WATCHDOG: INITIATING EMERGENCY ABORT (SIGTERM) <<<
 ```
+
+CPU 사용률이 57.42%까지 증가한 뒤 임계치를 초과하였고, Watchdog가 시스템 보호를 위해 SIGTERM을 발생시켜 프로세스를 종료하였다.
 
 Timestamp
 
-```
-2026-06-26 04:27:43
-```
-
-PID
-
-```
-29
+```text
+2026-06-26 06:19:59
 ```
 
-📷 **이미지 : 8.png**
-![CPU_MAX_OCCUPY=70, Warning 상태)](./img/8.png)
+📷 **이미지 : 14.png (CPU Threshold Violated 및 Watchdog 종료)**
+![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
+
+---
 
 ## 원인
 
-CPU 사용 제한값이 권장 기준보다 높게 설정되어 있었으며 특정 프로세스가 CPU를 과도하게 사용할 가능성이 존재하였다.
+CPU 사용 제한값이 권장 기준보다 높게 설정되어 있었으며, CpuWorker가 실행되면서 특정 프로세스가 CPU를 지속적으로 점유하였다.
 
-Watchdog는 시스템 전체 응답성을 유지하기 위해 CPU 과점유 프로세스를 종료하도록 설계되어 있다.
+Watchdog는 시스템 전체 응답성을 유지하기 위해 CPU 사용률이 임계치를 초과한 프로세스를 종료하도록 설계되어 있다.
 
 ---
 
@@ -149,91 +150,132 @@ export CPU_MAX_OCCUPY=50
 
 ## Before & After
 
-| 항목           | Before  | After |
-| -------------- | ------- | ----- |
-| CPU_MAX_OCCUPY | 70      | 50    |
-| CPU 상태       | WARNING | OK    |
-| 권장 상태      | 초과    | 충족  |
-| Watchdog 위험  | 있음    | 감소  |
+| 항목           | Before                           | After                               |
+| -------------- | -------------------------------- | ----------------------------------- |
+| CPU_MAX_OCCUPY | 70                               | 50                                  |
+| CPU 상태       | WARNING                          | OK                                  |
+| 프로세스 종료  | WATCHDOG에 의해 SIGTERM 종료     | 초기 Resource Check에서 CPU OK 확인 |
+| 핵심 로그      | CPU Threshold Violated, WATCHDOG | CPU Limit : 50%, OK                 |
 
-📷 **이미지 : 8.png (Before)**
-![CPU_MAX_OCCUPY=70, Warning 상태)](./img/8.png)
+CPU_MAX_OCCUPY=70 상태에서는 CPU 사용률이 57.42%까지 증가한 뒤 Watchdog에 의해 프로세스가 종료되었다.
 
-📷 **이미지 : 7.png (After)**
+CPU_MAX_OCCUPY=50으로 변경한 뒤에는 Resource Check에서 CPU 상태가 OK로 표시되어 권장 설정을 충족하는 것을 확인하였다.
+
+📷 **이미지 : 14.png (Before - CPU Watchdog 종료)**
+![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
+
+📷 **이미지 : 7.png (After - CPU Limit 50%, OK)**
 ![CPU_MAX_OCCUPY=50 설정 후 OK 상태](./img/7.png)
+
+---
 
 # 5. Potential Deadlock
 
 ## 현상
 
-CPU 사용률이 지속적으로 증가하면서 다음과 같은 로그가 출력되었다.
+멀티스레드 환경에서 실행한 결과 다음과 같은 경고가 출력되었다.
 
 ```text
-Current Load : 57.42%
+MULTI_THREAD_ENABLE=True
 
-[CRITICAL] CPU Threshold Violated!
-
->>> WATCHDOG: INITIATING EMERGENCY ABORT (SIGTERM)
+SYSTEM WARNING
+POTENTIAL DEADLOCK IN CONCURRENT MODE
 ```
 
-Watchdog는 CPU 사용률이 설정된 임계치를 초과했다고 판단하여 프로세스를 강제 종료하였다.
+이후 Worker Thread들이 서로 다른 공유 자원을 점유한 상태에서 상대방이 가진 자원을 기다리는 로그가 출력되었고, 프로그램 진행이 멈춘 상태가 되었다.
+
+```text
+2026-06-26 06:22:40,480 [INFO] [AgentWorker][Worker-Thread-1] LOCK ACQUIRED: [Shared_Memory_A]. (Holding...)
+2026-06-26 06:22:40,482 [INFO] [AgentWorker][Worker-Thread-2] LOCK ACQUIRED: [Socket_Pool_B]. (Holding...)
+2026-06-26 06:22:42,498 [INFO] [AgentWorker][Worker-Thread-2] Need resource [Shared_Memory_A] to write logs.
+2026-06-26 06:22:42,499 [INFO] [AgentWorker][Worker-Thread-1] Need resource [Socket_Pool_B] to finish job.
+2026-06-26 06:22:42,500 [INFO] [AgentWorker][Worker-Thread-2] WAITING for [Shared_Memory_A]... (Status: BLOCKED)
+2026-06-26 06:22:42,500 [INFO] [AgentWorker][Worker-Thread-1] WAITING for [Socket_Pool_B]... (Status: BLOCKED)
+```
 
 Timestamp
 
-```
-2026-06-26 06:19:59
-```
-
-PID
-
-```
-27
+```text
+2026-06-26 06:22:42
 ```
 
-📷 **이미지 : 14.png (CPU Threshold Violated 및 Watchdog 종료)**
-![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
+📷 **이미지 : 12.png 또는 Deadlock 로그 이미지**
+![Deadlock Thread Log](./img/12.png)
+
+---
 
 ## 장애 진단 과정
 
-장애 발생 시 아래 순서로 확인하였다.
+장애 발생 시 다음 순서로 확인하였다.
 
-1. ps -ef로 PID 존재 여부 확인
-2. top으로 CPU 사용률 확인
-3. free 명령으로 메모리 사용량 확인
-4. 로그(Timestamp)를 확인하여 마지막 출력 지점 분석
-5. Deadlock 여부 판단
+1. `ps -ef`로 프로세스와 PID 존재 여부 확인
+2. `top -bn1`로 CPU 사용률 확인
+3. `free -m`으로 메모리 사용량 확인
+4. 로그의 마지막 Timestamp 확인
+5. Worker Thread의 Lock 획득 및 대기 로그 분석
 
-PID가 존재하고 로그가 더 이상 출력되지 않는다면 종료가 아니라 Deadlock 가능성을 의심할 수 있다.
+프로세스가 종료되지 않은 상태에서 로그가 `WAITING`, `BLOCKED` 이후 더 이상 진행되지 않았기 때문에 단순 종료가 아니라 Deadlock 가능성을 의심하였다.
 
-📷 **이미지 : 4.png (PID 확인)**
-![PID 확인](./img/4.png)
+📷 **이미지 : 5.png (PID 확인)**
+![PID 확인](./img/5.png)
+
+---
 
 ## 원인
 
 멀티스레드 환경에서는 공유 자원에 대해 상호 배제(Mutual Exclusion)가 발생한다.
 
-Thread A는 Lock1을 점유한 채 Lock2를 기다리고,
+로그 분석 결과 두 개의 Worker Thread가 서로 다른 Lock을 점유한 상태에서 상대방의 Lock을 기다리는 순환 의존 관계를 확인하였다.
 
-Thread B는 Lock2를 점유한 채 Lock1을 기다리는 순환 대기(Circular Wait)가 형성되면 Deadlock이 발생한다.
+```text
+Worker-Thread-1
+Shared_Memory_A Lock 획득
+↓
+Socket_Pool_B 필요
+↓
+Socket_Pool_B 대기
+
+Worker-Thread-2
+Socket_Pool_B Lock 획득
+↓
+Shared_Memory_A 필요
+↓
+Shared_Memory_A 대기
+```
+
+즉, `Worker-Thread-1`은 `Shared_Memory_A`를 가진 상태로 `Socket_Pool_B`를 기다리고, `Worker-Thread-2`는 `Socket_Pool_B`를 가진 상태로 `Shared_Memory_A`를 기다리고 있다.
+
+이로 인해 `Worker-Thread-1 → Worker-Thread-2 → Worker-Thread-1` 형태의 순환 대기(Circular Wait)가 발생하였으므로 Deadlock으로 판단하였다.
+
+---
 
 ## 조치
+
+멀티스레드 동시 실행을 비활성화하여 공유 자원에 대한 동시 접근을 회피하였다.
 
 ```bash
 export MULTI_THREAD_ENABLE=false
 ```
 
+---
+
 ## Before & After
 
-| 항목                | Before             | After  |
-| ------------------- | ------------------ | ------ |
-| MULTI_THREAD_ENABLE | True               | False  |
-| THREAD 상태         | WARNING            | OK     |
-| SYSTEM STATUS       | POTENTIAL DEADLOCK | STABLE |
+| 항목                | Before                     | After              |
+| ------------------- | -------------------------- | ------------------ |
+| MULTI_THREAD_ENABLE | True                       | False              |
+| THREAD 상태         | WARNING                    | OK                 |
+| SYSTEM STATUS       | POTENTIAL DEADLOCK         | STABLE             |
+| 로그 상태           | WAITING / BLOCKED에서 멈춤 | STABLE 상태로 시작 |
 
-📷 **이미지 : 14.png (Before)**
-![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
+MULTI_THREAD_ENABLE=True 상태에서는 두 Worker Thread가 서로 다른 자원을 점유한 채 상대방의 자원을 기다리는 `WAITING/BLOCKED` 상태가 발생하였다.
 
-📷 **이미지 : 7.png (After)**
+MULTI_THREAD_ENABLE=false로 변경한 뒤에는 Thread Concurrency가 False로 표시되었고, `SYSTEM STATUS : STABLE`이 출력되어 Deadlock 경고가 사라진 것을 확인하였다.
+
+📷 **이미지 : 12.png (Before - Deadlock 로그)**
+![Deadlock Thread Log](./img/12.png)
+
+📷 **이미지 : 7.png (After - STABLE 상태)**
 ![MULTI_THREAD_ENABLE=False, SYSTEM STATUS : STABLE](./img/7.png)
 
 # 6. monitor.sh 분석
