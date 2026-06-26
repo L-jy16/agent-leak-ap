@@ -95,6 +95,9 @@ export MEMORY_LIMIT=1024
 
 ※ 이번 실습에서는 Memory Limit 변경은 수행하였으나 실제 증가된 생존 시간을 정량적으로 측정하지 못하였다.
 
+📷 **이미지 : 13.png (MEMORY_LIMIT=512 적용 화면)**
+![MEMORY_LIMIT=512 적용 화면](./img/13.png)
+
 # 4. CPU Spike
 
 ## 현상
@@ -163,34 +166,32 @@ export CPU_MAX_OCCUPY=50
 
 ## 현상
 
-멀티스레드 환경에서 실행하였다.
+CPU 사용률이 지속적으로 증가하면서 다음과 같은 로그가 출력되었다.
 
 ```text
-MULTI_THREAD_ENABLE=True
+Current Load : 57.42%
+
+[CRITICAL] CPU Threshold Violated!
+
+>>> WATCHDOG: INITIATING EMERGENCY ABORT (SIGTERM)
 ```
 
-실행 결과
-
-```text
-SYSTEM WARNING
-
-POTENTIAL DEADLOCK IN CONCURRENT MODE
-```
+Watchdog는 CPU 사용률이 설정된 임계치를 초과했다고 판단하여 프로세스를 강제 종료하였다.
 
 Timestamp
 
 ```
-2026-06-26 04:32:29
+2026-06-26 06:19:59
 ```
 
 PID
 
 ```
-31
+27
 ```
 
-📷 **이미지 : 6.png**
-![MULTI_THREAD_ENABLE=True, POTENTIAL DEADLOCK 경고](./img/6.png)
+📷 **이미지 : 14.png (CPU Threshold Violated 및 Watchdog 종료)**
+![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
 
 ## 장애 진단 과정
 
@@ -229,54 +230,92 @@ export MULTI_THREAD_ENABLE=false
 | THREAD 상태         | WARNING            | OK     |
 | SYSTEM STATUS       | POTENTIAL DEADLOCK | STABLE |
 
-📷 **이미지 : 6.png (Before)**
-![MULTI_THREAD_ENABLE=True, POTENTIAL DEADLOCK 경고](./img/6.png)
+📷 **이미지 : 14.png (Before)**
+![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
 
 📷 **이미지 : 7.png (After)**
 ![MULTI_THREAD_ENABLE=False, SYSTEM STATUS : STABLE](./img/7.png)
 
 # 6. monitor.sh 분석
 
-monitor.sh를 이용하여 시스템 상태를 확인하였다.
+monitor.sh는 `ps`, `top`, `free`, `df`, `ss` 등의 Linux 명령어를 이용하여 프로세스와 시스템 리소스 상태를 확인하기 위한 관제 스크립트라고 판단하였다.
 
-| 항목    | 명령어    | 목적                    |
-| ------- | --------- | ----------------------- |
-| Process | ps        | 프로세스 실행 여부 확인 |
-| CPU     | top -bn1  | CPU 사용률 확인         |
-| Memory  | free      | 메모리 확인             |
-| Disk    | df        | 디스크 확인             |
-| Port    | ss -tulnp | 서비스 포트 확인        |
+| 항목    | 명령어                | 목적                                                   |
+| ------- | --------------------- | ------------------------------------------------------ |
+| Process | `ps`                  | 프로세스 실행 여부와 PID 확인                          |
+| CPU     | `top -bn1`            | CPU 사용률을 1회 출력하여 프로세스 부하 확인           |
+| Memory  | `free` 또는 `free -m` | 전체 메모리, 사용 중인 메모리, 사용 가능한 메모리 확인 |
+| Disk    | `df`                  | 디스크 사용률 확인                                     |
+| Port    | `ss -tulnp`           | 서비스 포트 사용 여부 확인                             |
+
+---
+
+## Memory 확인
+
+메모리 사용량은 다음 명령어를 이용하여 확인하였다.
+
+```bash
+free -m
+```
+
+`free -m` 명령어는 메모리 사용량을 MB 단위로 보여주며 다음 정보를 제공한다.
+
+- **total** : 전체 메모리 용량
+- **used** : 현재 사용 중인 메모리
+- **free** : 즉시 사용 가능한 메모리
+- **available** : 실제로 새 프로세스가 사용할 수 있는 메모리
+- **Swap** : 스왑 메모리 사용량
+
+OOM 장애가 발생한 경우, 프로그램 로그의 Heap Memory 증가 패턴과 `free -m` 결과를 함께 확인하여 애플리케이션 내부 메모리 증가가 시스템 전체 메모리 상태에 어떤 영향을 주는지 판단할 수 있다.
+
+📷 **이미지 : 15.png (free -m 결과)**
+![free -m 결과](./img/15.png)
+
+---
+
+## CPU 확인
+
+CPU 사용률은 다음 명령어를 이용하여 확인하였다.
+
+```bash
+top -bn1
+```
+
+옵션의 의미는 다음과 같다.
+
+- **-b (Batch Mode)** : 대화형 화면을 지속적으로 갱신하지 않고 결과를 텍스트 형태로 출력한다.
+- **-n 1** : `top` 명령을 1회만 실행한 뒤 종료한다.
+
+따라서 `top -bn1`은 monitor.sh에서 CPU 사용률을 한 번 측정하여 로그로 저장하거나 캡처하기에 적합하다.
+
+CPU Spike가 발생한 경우 `top -bn1` 결과와 프로그램 로그의 `CpuWorker Current Load`, `CPU Threshold Violated`, `WATCHDOG` 로그를 함께 비교하여 특정 프로세스의 CPU 과점유 여부를 판단할 수 있다.
 
 ---
 
 ## 장애 진단 절차
 
+장애가 발생했을 때는 아래 순서로 원인을 추적하였다.
+
 ```text
 ps
-
 ↓
+프로세스와 PID 존재 여부 확인
 
-top
-
+top -bn1
 ↓
+CPU 사용률 확인
 
-free
-
+free -m
 ↓
+메모리 사용량 확인
 
 로그 확인
-
 ↓
+마지막 Timestamp와 종료/대기 메시지 확인
 
-PID 확인
-
+PID 및 Timestamp 비교
 ↓
-
-Timestamp 비교
-
-↓
-
-원인 추론
+프로세스 종료, OOM, CPU Spike, Deadlock 여부 판단
 ```
 
 # 7. 운영 환경 개선
