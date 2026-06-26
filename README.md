@@ -2,11 +2,13 @@
 
 # AI SW Basic - Agent Leak App Failure Report
 
-## 1. 개발 환경
+## 1. 개발 환경 및 목적
 
 - OS : macOS (Apple Silicon M3)
 - Runtime : Docker Ubuntu 22.04
 - Architecture : linux/arm64
+
+특정 명령어를 외우게 하는 것이 나니라 실무형 자애 분석 및 협업 역량을 기른것을 목적이라고 생각합니다.
 
 # 2. Boot Sequence
 
