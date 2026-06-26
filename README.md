@@ -65,12 +65,6 @@ MemoryGuard는 단순히 프로그램을 종료하는 기능이 아니라 메모
 export MEMORY_LIMIT=512
 ```
 
-또는
-
-```bash
-export MEMORY_LIMIT=1024
-```
-
 ## Before & After
 
 | 항목          | Before           | After                    |
@@ -127,8 +121,8 @@ Timestamp
 2026-06-26 06:19:59
 ```
 
-📷 **이미지 : 14.png (CPU Threshold Violated 및 Watchdog 종료)**
-![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
+📷 **이미지 : 14-1.png (CPU Threshold Violated 및 Watchdog 종료)**
+![CPU Threshold Violated 및 Watchdog 종료](./img/14-1.png)
 
 ---
 
@@ -161,8 +155,8 @@ CPU_MAX_OCCUPY=70 상태에서는 CPU 사용률이 57.42%까지 증가한 뒤 Wa
 
 CPU_MAX_OCCUPY=50으로 변경한 뒤에는 Resource Check에서 CPU 상태가 OK로 표시되어 권장 설정을 충족하는 것을 확인하였다.
 
-📷 **이미지 : 14.png (Before - CPU Watchdog 종료)**
-![CPU Threshold Violated 및 Watchdog 종료](./img/14.png)
+📷 **이미지 : 14-1.png (Before - CPU Watchdog 종료)**
+![CPU Threshold Violated 및 Watchdog 종료](./img/14-1.png)
 
 📷 **이미지 : 7.png (After - CPU Limit 50%, OK)**
 ![CPU_MAX_OCCUPY=50 설정 후 OK 상태](./img/7.png)
@@ -279,6 +273,75 @@ MULTI_THREAD_ENABLE=false로 변경한 뒤에는 Thread Concurrency가 False로 
 ![MULTI_THREAD_ENABLE=False, SYSTEM STATUS : STABLE](./img/7.png)
 
 # 6. monitor.sh 분석
+
+monitor.sh
+
+```bash
+#!/bin/bash
+
+LOG_FILE="${AGENT_LOG_DIR:-/mission/logs}/monitor.log"
+APP_NAME="${APP_NAME:-agent-leak-app-arm64}"
+APP_PORT="${AGENT_PORT:-15034}"
+
+NOW=$(date "+%Y-%m-%d %H:%M:%S")
+
+mkdir -p "$(dirname "$LOG_FILE")"
+
+PID=$(pgrep -f "$APP_NAME" | head -n 1)
+
+echo "====== SYSTEM MONITOR RESULT ======"
+echo "[HEALTH CHECK]"
+
+if [ -z "$PID" ]; then
+    echo "Checking process '$APP_NAME'... [FAIL]"
+    echo "Reason: target process is not running."
+    PROC_CPU="N/A"
+    PROC_MEM="N/A"
+else
+    echo "Checking process '$APP_NAME'... [OK] (PID: $PID)"
+    PROC_CPU=$(ps -p "$PID" -o %cpu= | awk '{print $1}')
+    PROC_MEM=$(ps -p "$PID" -o %mem= | awk '{print $1}')
+fi
+
+if ss -tulnp | grep -q ":$APP_PORT"; then
+    echo "Checking port $APP_PORT... [OK]"
+else
+    echo "Checking port $APP_PORT... [FAIL]"
+fi
+
+SYS_CPU=$(top -bn1 | grep "Cpu(s)" | awk '{print 100 - $8}')
+SYS_MEM=$(free | awk '/Mem:/ {printf("%.1f", $3/$2 * 100)}')
+DISK=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
+
+echo "[SYSTEM RESOURCE]"
+echo "CPU Usage : $SYS_CPU%"
+echo "MEM Usage : $SYS_MEM%"
+echo "DISK Used : $DISK%"
+
+echo "[PROCESS RESOURCE]"
+echo "Agent PID       : ${PID:-N/A}"
+echo "Agent CPU Usage : $PROC_CPU%"
+echo "Agent MEM Usage : $PROC_MEM%"
+
+SYS_CPU_INT=$(printf "%.0f" "$SYS_CPU")
+SYS_MEM_INT=$(printf "%.0f" "$SYS_MEM")
+
+if [ "$SYS_CPU_INT" -gt 20 ]; then
+    echo "[WARNING] System CPU threshold exceeded ($SYS_CPU% > 20%)"
+fi
+
+if [ "$SYS_MEM_INT" -gt 10 ]; then
+    echo "[WARNING] System MEM threshold exceeded ($SYS_MEM% > 10%)"
+fi
+
+if [ "$DISK" -gt 80 ]; then
+    echo "[WARNING] DISK threshold exceeded ($DISK% > 80%)"
+fi
+
+echo "[$NOW] PID:${PID:-N/A} SYS_CPU:$SYS_CPU% SYS_MEM:$SYS_MEM% PROC_CPU:$PROC_CPU% PROC_MEM:$PROC_MEM% DISK_USED:$DISK%" >> "$LOG_FILE"
+
+echo "[INFO] Log appended: $LOG_FILE"
+```
 
 monitor.sh는 `ps`, `top`, `free`, `df`, `ss` 등의 Linux 명령어를 이용하여 프로세스와 시스템 리소스 상태를 확인하기 위한 관제 스크립트라고 판단하였다.
 
